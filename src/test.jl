@@ -47,8 +47,9 @@ end
 function priors(θ)
     βp = Normal(0, 5)
     σp = Cauchy(0, 2.5)
-    β = θ[1]
-    llike = logpdf(σp, θ[2])
+    β1, βrest, σ = θ
+    β = vcat(β1, βrest)
+    llike = logpdf(σp, σ)
     for i = 1:length(β)
         llike += logpdf(βp, β[i])
     end
@@ -56,7 +57,8 @@ function priors(θ)
 end
 
 function likelihood(prob, θ)
-    β, σ = θ
+    β1, βrest, σ = θ
+    β = vcat(β1, βrest)
     #TODO: write out the loop
     llike = 0.0
     for (i, μ) in enumerate(prob.X * β)
@@ -72,13 +74,14 @@ end
 prob = EcoRegProblem(X, y_sim)
 
 #TODO: the first element of β needs to be positive
-θ_transform = TransformationTuple(ArrayTransformation(bridge(ℝ, ℝ), P), bridge(ℝ, ℝ⁺))
-
+θ_transform = TransformationTuple(bridge(ℝ, ℝ⁺),                     # β₁
+                                  ArrayTransformation(IDENTITY, 9),  # β rest
+                                  bridge(ℝ, ℝ⁺))                     # σ
 tprob = TransformLogLikelihood(prob, θ_transform)
 tprob∇ = ForwardGradientWrapper(tprob, fill(0.0, length(tprob)))
 
 #TODO: this seems to much slower than stan
-@time samp, NUTS_tuned = NUTS_init_tune_mcmc(tprob∇, fill(0.0, length(tprob)), 2000)
+@time samp, NUTS_tuned = NUTS_init_tune_mcmc(tprob∇, fill(0.0, length(tprob)), 4000)
 #@time samp = mcmc(NUTS_tuned, 2000)
 
 NUTS_statistics(samp)
@@ -88,7 +91,8 @@ ESS = squeeze(mapslices(effective_sample_size, ungrouping_map(Array, get_positio
 # and groups then in tuples of vectors or arrays. You could do this manually, but you have to
 # use get_position to extract the posterior position for each point. Also, in order to do inference,
 # you would want to transform the "raw" values in $\mathbb{R}^n$ using the parameter transformation.
-β, σ = ungrouping_map(Array, θ_transform ∘ get_position, samp)
+β1, βrest, σ = ungrouping_map(Array, θ_transform ∘ get_position, samp)
+β = hcat(β1, βrest)
 #β = β[10000:end, :]
 #σ = σ[10000:end]
 
