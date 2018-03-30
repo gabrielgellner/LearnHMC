@@ -9,33 +9,124 @@ using MCMCDiagnostics
 using DiffWrappers
 using PyPlot
 
-# It is convenient to define a structure that holds the data,
+# Generate the data from a more complex model
+function dgp_rng(X::Matrix, β::Vector, ν, σ)
+    y = fill(0.0, size(X, 1))
+    for n in 1:size(X, 1)
+        #TODO: do a pull request to add the non-centered version
+        y[n] = σ * (rand(TDist(ν))) + sum(X[n, :] .* β)
+    end
+    return y
+end
+
+#TODO: add random data
+# Number of observations
+N = 1000
+# Number of covariates
+P = 10
+X = rand(Normal(), N, P)
+
+# Degrees of freedom for Cauchy noise (\nu)
+ν = 5.0
+# scale parameter
+σ_true = 5.0
+# generate some random coefficients that we'll try to recover
+β_true = rand(Normal(), 10)
+# Make sure the first element of  eta is positive as in our chosen DGP
+β_true[1] = abs(β_true[1])
+
+y_sim = dgp_rng(X, β_true, ν, σ_true)
+figure()
+plt[:hist](y_sim, bins = 30)
+
 struct EcoRegProblem
-    "Quantity"
     X::Matrix{Float64}
-    σ::Float64
     data::Vector{Float64}
 end
 
-function (problem::EcoRegProblem)(θ)
-    β = θ[1:2]
-    @unpack X, σ, data = problem
-    llike = 1.0
-    for (i, μ) in enumerate(X * β)
-        llike += logpdf(Normal(μ, σ), data[i])
+function priors(θ)
+    βp = Normal(0, 5)
+    σp = Cauchy(0, 2.5)
+    β = θ[1]
+    llike = logpdf(σp, θ[2])
+    for i = 1:length(β)
+        llike += logpdf(βp, β[i])
     end
-    return llike + logpdf(Uniform(0, 5), β[1]) + logpdf(Uniform(0, 5), β[2])
+    return llike
 end
 
-sim_data = [1 2; 3 4] * [0.5, 2.2]
+function likelihood(prob, θ)
+    β, σ = θ
+    #TODO: write out the loop
+    llike = 0.0
+    for (i, μ) in enumerate(prob.X * β)
+        llike += logpdf(Normal(μ, σ), prob.data[i])
+    end
+    return llike
+end
 
-prob = EcoRegProblem([1 2; 3 4], 0.1, sim_data)
-prob([0.5, 2.1])
+function (prob::EcoRegProblem)(θ)
+    return likelihood(prob, θ) + priors(θ)
+end
 
-#TODO: I need to add transforamtions so that the β can not go outside of (0, 5)
+prob = EcoRegProblem(X, y_sim)
 
-prob∇ = ForwardGradientWrapper(prob, [0.0, 0.0])
-prob∇(ones(length(prob∇)))
-samp, NUTS_tuned = NUTS_init_tune_mcmc(prob∇, [1, 1.0], 1000)
+#TODO: the first element of β needs to be positive
+θ_transform = TransformationTuple(ArrayTransformation(bridge(ℝ, ℝ), P), bridge(ℝ, ℝ⁺))
+
+tprob = TransformLogLikelihood(prob, θ_transform)
+tprob∇ = ForwardGradientWrapper(tprob, fill(0.0, length(tprob)))
+
+#TODO: this seems to much slower than stan
+@time samp, NUTS_tuned = NUTS_init_tune_mcmc(tprob∇, fill(0.0, length(tprob)), 2000)
+#@time samp = mcmc(NUTS_tuned, 2000)
 
 NUTS_statistics(samp)
+ESS = squeeze(mapslices(effective_sample_size, ungrouping_map(Array, get_position, samp), 1), 1)
+
+# Note the use of ungrouping_map, a utility function that maps the collects posterior results,
+# and groups then in tuples of vectors or arrays. You could do this manually, but you have to
+# use get_position to extract the posterior position for each point. Also, in order to do inference,
+# you would want to transform the "raw" values in $\mathbb{R}^n$ using the parameter transformation.
+β, σ = ungrouping_map(Array, θ_transform ∘ get_position, samp)
+#β = β[10000:end, :]
+#σ = σ[10000:end]
+
+# Posterior means are fairly close to the parameters (note that they will not be the same,
+# because of sampling variation):
+for icol = 1:size(β, 2)
+    @show mean(β[:, icol]), β_true[icol]
+end
+mean(σ), σ_true
+
+# # Plot some results
+# ## Posterior
+function plot_posterior(known_value, posterior_draws, varname; nbins = 20)
+    #postr = fit(Histogram, posterior_draws; closed = :right, args...)
+    plt[:hist](posterior_draws, bins = nbins, label = "posterior")
+    xlabel(varname)
+    axvline([known_value], label = "known value", c = "red")
+    #legend()
+end
+
+begin
+    figure()
+    for i = 1:size(β, 2)
+        subplot(3, 4, i)
+        plot_posterior(β_true[1], β[:, i], "β$i"; nbins = 20)
+    end
+    subplot(3, 4, P + 1)
+    plot_posterior(σ_true, σ, "σ"; nbins = 20)
+    tight_layout()
+end
+
+# ## MCMC sampling
+begin
+    figure()
+    for i = 1:size(β, 2)
+        subplot(3, 4, i)
+        plot(β[:, i], label = "β$i")
+        axhline([β_true[i]], c = "red")
+    end
+    tight_layout()
+end

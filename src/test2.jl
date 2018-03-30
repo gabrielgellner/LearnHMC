@@ -63,7 +63,7 @@ tprob([true_a, true_b, true_sd])
 tprob∇ = ForwardGradientWrapper(tprob, fill(0.0, length(tprob)))
 tprob∇(ones(length(tprob∇)))
 
-samp, NUTS_tuned = NUTS_init_tune_mcmc(tprob∇, fill(0.0, length(tprob)), 20000)
+@time samp, NUTS_tuned = NUTS_init_tune_mcmc(tprob∇, fill(0.0, length(tprob)), 20000)
 
 NUTS_statistics(samp)
 ESS = squeeze(mapslices(effective_sample_size, ungrouping_map(Array, get_position, samp), 1), 1)
@@ -76,9 +76,9 @@ ESS = squeeze(mapslices(effective_sample_size, ungrouping_map(Array, get_positio
 
 # Posterior means are fairly close to the parameters (note that they will not be the same,
 # because of sampling variation):
-mean(a[5000:end]), true_a
-mean(b[500:end]), true_b
-mean(sd[5000:end]), true_sd
+mean(a), true_a
+mean(b), true_b
+mean(sd), true_sd
 
 median(a), true_a
 median(b), true_b
